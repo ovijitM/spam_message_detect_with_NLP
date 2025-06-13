@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spam Message Detector</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Spam Message Detector</h1>
+            <p class="subtitle">Check if your message is spam or legitimate</p>
+        </header>
+
+        <main>
+            <div class="input-section">
+                <textarea 
+                    id="messageInput" 
+                    placeholder="Enter your message here..."
+                    rows="6"
+                ></textarea>
+                <button id="checkButton" class="primary-button">Check Message</button>
+            </div>
+
+            <div id="result" class="result-section hidden">
+                <div class="result-card">
+                    <h2>Analysis Result</h2>
+                    <div class="result-content">
+                        <div class="status-indicator">
+                            <span id="statusIcon" class="status-icon"></span>
+                            <span id="statusText" class="status-text"></span>
+                        </div>
+                        <div class="confidence-meter">
+                            <div class="confidence-label">Confidence:</div>
+                            <div class="confidence-bar">
+                                <div id="confidenceFill" class="confidence-fill"></div>
+                            </div>
+                            <div id="confidenceValue" class="confidence-value">0%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="error" class="error-message hidden">
+                Please enter a message to check.
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by Natural Language Processing</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html> 
