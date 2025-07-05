@@ -1,29 +1,31 @@
-from flask import Flask, render_template, request, jsonify
-import os
-import sys
-import pickle
-import pandas as pd
-import numpy as np
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.naive_bayes import MultinomialNB
-from sklearn.model_selection import train_test_split
-import nltk
+from flask import Flask, request, jsonify
 import re
 import string
-
-# Download required NLTK data
-try:
-    nltk.download('stopwords', quiet=True)
-    nltk.download('punkt', quiet=True)
-except:
-    pass
+import math
+from collections import Counter
 
 app = Flask(__name__)
 
-class SpamFilter:
+# Common English stop words
+STOP_WORDS = {
+    'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your', 'yours',
+    'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she', 'her', 'hers',
+    'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 'theirs', 'themselves',
+    'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those', 'am', 'is', 'are',
+    'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'having', 'do', 'does',
+    'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until',
+    'while', 'of', 'at', 'by', 'for', 'with', 'through', 'during', 'before', 'after',
+    'above', 'below', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under', 'again',
+    'further', 'then', 'once'
+}
+
+class LightweightSpamFilter:
     def __init__(self):
-        self.vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
-        self.model = MultinomialNB()
+        self.spam_words = {}
+        self.ham_words = {}
+        self.spam_count = 0
+        self.ham_count = 0
+        self.vocabulary = set()
         self.is_trained = False
     
     def preprocess_text(self, text):
@@ -34,69 +36,100 @@ class SpamFilter:
         text = text.translate(str.maketrans('', '', string.punctuation))
         # Remove numbers
         text = re.sub(r'\d+', '', text)
-        # Remove extra whitespace
-        text = ' '.join(text.split())
-        return text
+        # Split into words and remove stop words
+        words = [word for word in text.split() if word not in STOP_WORDS and len(word) > 2]
+        return words
     
-    def train(self, data_path=None, data=None):
-        """Train the spam filter"""
-        if data is None:
-            # Use default training data for Vercel deployment
-            # Since we can't read from files easily, we'll use a small dataset
-            training_data = [
-                ("Free money now!!!", "spam"),
-                ("Click here to win $1000!", "spam"),
-                ("Urgent! Your account will be closed", "spam"),
-                ("LIMITED TIME OFFER - CLICK NOW", "spam"),
-                ("You have won a prize! Click to claim", "spam"),
-                ("Hello, how are you doing today?", "ham"),
-                ("Meeting at 3pm tomorrow", "ham"),
-                ("Can you send me the report?", "ham"),
-                ("Thanks for your help yesterday", "ham"),
-                ("Looking forward to the weekend", "ham"),
-                ("Congratulations! You've won $10000!", "spam"),
-                ("Call now for free consultation", "spam"),
-                ("Your credit card has been charged", "spam"),
-                ("See you at the conference", "ham"),
-                ("Happy birthday! Hope you have a great day", "ham")
-            ]
+    def train(self):
+        """Train the spam filter with a lightweight dataset"""
+        # Training data: (message, label)
+        training_data = [
+            ("free money now click here urgent", "spam"),
+            ("congratulations you won million dollars", "spam"),
+            ("limited time offer click now", "spam"),
+            ("urgent your account will be closed", "spam"),
+            ("winner notification click claim prize", "spam"),
+            ("call now free consultation", "spam"),
+            ("credit card has been charged", "spam"),
+            ("act now limited time", "spam"),
+            ("earn money fast", "spam"),
+            ("guarantee profit investment", "spam"),
+            ("hello how are you today", "ham"),
+            ("meeting tomorrow afternoon", "ham"),
+            ("can you send report", "ham"),
+            ("thanks for help yesterday", "ham"),
+            ("looking forward weekend", "ham"),
+            ("see you conference", "ham"),
+            ("happy birthday great day", "ham"),
+            ("project deadline next week", "ham"),
+            ("lunch plans today", "ham"),
+            ("good morning everyone", "ham")
+        ]
+        
+        # Process training data
+        for text, label in training_data:
+            words = self.preprocess_text(text)
+            self.vocabulary.update(words)
             
-            texts = [item[0] for item in training_data]
-            labels = [item[1] for item in training_data]
-        else:
-            texts = data['text'].tolist()
-            labels = data['label'].tolist()
+            if label == "spam":
+                self.spam_count += 1
+                for word in words:
+                    self.spam_words[word] = self.spam_words.get(word, 0) + 1
+            else:
+                self.ham_count += 1
+                for word in words:
+                    self.ham_words[word] = self.ham_words.get(word, 0) + 1
         
-        # Preprocess texts
-        processed_texts = [self.preprocess_text(text) for text in texts]
-        
-        # Vectorize the text
-        X = self.vectorizer.fit_transform(processed_texts)
-        
-        # Train the model
-        self.model.fit(X, labels)
         self.is_trained = True
     
     def predict(self, text):
-        """Predict if a text is spam or ham"""
+        """Predict if a text is spam or ham using Naive Bayes"""
         if not self.is_trained:
-            self.train()  # Train with default data if not trained
+            self.train()
         
-        processed_text = self.preprocess_text(text)
-        text_vector = self.vectorizer.transform([processed_text])
-        prediction = self.model.predict(text_vector)[0]
-        probability = self.model.predict_proba(text_vector)[0]
+        words = self.preprocess_text(text)
         
-        # Get probability for the predicted class
-        if prediction == 'spam':
-            prob = probability[1] if len(probability) > 1 else probability[0]
+        # Calculate probabilities
+        total_messages = self.spam_count + self.ham_count
+        spam_prior = self.spam_count / total_messages
+        ham_prior = self.ham_count / total_messages
+        
+        # Calculate log probabilities to avoid underflow
+        spam_score = math.log(spam_prior)
+        ham_score = math.log(ham_prior)
+        
+        total_spam_words = sum(self.spam_words.values())
+        total_ham_words = sum(self.ham_words.values())
+        vocab_size = len(self.vocabulary)
+        
+        for word in words:
+            # Laplace smoothing
+            spam_word_count = self.spam_words.get(word, 0)
+            ham_word_count = self.ham_words.get(word, 0)
+            
+            spam_word_prob = (spam_word_count + 1) / (total_spam_words + vocab_size)
+            ham_word_prob = (ham_word_count + 1) / (total_ham_words + vocab_size)
+            
+            spam_score += math.log(spam_word_prob)
+            ham_score += math.log(ham_word_prob)
+        
+        # Determine prediction
+        if spam_score > ham_score:
+            prediction = "spam"
+            # Convert log probabilities back to regular probabilities
+            exp_spam = math.exp(spam_score)
+            exp_ham = math.exp(ham_score)
+            probability = exp_spam / (exp_spam + exp_ham)
         else:
-            prob = probability[0] if len(probability) > 1 else probability[0]
+            prediction = "ham"
+            exp_spam = math.exp(spam_score)
+            exp_ham = math.exp(ham_score)
+            probability = exp_ham / (exp_spam + exp_ham)
         
-        return prediction, prob
+        return prediction, probability
 
 # Global spam filter instance
-spam_filter = SpamFilter()
+spam_filter = LightweightSpamFilter()
 
 @app.route('/')
 def home():
