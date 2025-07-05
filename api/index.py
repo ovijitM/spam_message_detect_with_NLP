@@ -316,10 +316,27 @@ def home():
     </html>
     '''
 
+@app.route('/api/health')
+def health_check():
+    try:
+        return jsonify({
+            'status': 'healthy',
+            'message': 'Spam detection API is running',
+            'model_trained': spam_filter.is_trained
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e)
+        }), 500
+
 @app.route('/api/check_spam', methods=['POST'])
 def check_spam():
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+            
         message = data.get('message', '')
         
         if not message:
@@ -337,11 +354,16 @@ def check_spam():
             'is_spam': prediction == 'spam'
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Better error logging
+        import traceback
+        error_details = traceback.format_exc()
+        return jsonify({
+            'error': f'Internal server error: {str(e)}',
+            'details': error_details
+        }), 500
 
-# This is required for Vercel
-def handler(request):
-    return app(request.environ, lambda *args: None)
+# Export the app for Vercel
+app = app
 
 # For local development
 if __name__ == '__main__':
