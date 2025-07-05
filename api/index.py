@@ -1,0 +1,315 @@
+from flask import Flask, render_template, request, jsonify
+import os
+import sys
+import pickle
+import pandas as pd
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.model_selection import train_test_split
+import nltk
+import re
+import string
+
+# Download required NLTK data
+try:
+    nltk.download('stopwords', quiet=True)
+    nltk.download('punkt', quiet=True)
+except:
+    pass
+
+app = Flask(__name__)
+
+class SpamFilter:
+    def __init__(self):
+        self.vectorizer = TfidfVectorizer(max_features=5000, stop_words='english')
+        self.model = MultinomialNB()
+        self.is_trained = False
+    
+    def preprocess_text(self, text):
+        """Clean and preprocess text"""
+        # Convert to lowercase
+        text = text.lower()
+        # Remove punctuation
+        text = text.translate(str.maketrans('', '', string.punctuation))
+        # Remove numbers
+        text = re.sub(r'\d+', '', text)
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+        return text
+    
+    def train(self, data_path=None, data=None):
+        """Train the spam filter"""
+        if data is None:
+            # Use default training data for Vercel deployment
+            # Since we can't read from files easily, we'll use a small dataset
+            training_data = [
+                ("Free money now!!!", "spam"),
+                ("Click here to win $1000!", "spam"),
+                ("Urgent! Your account will be closed", "spam"),
+                ("LIMITED TIME OFFER - CLICK NOW", "spam"),
+                ("You have won a prize! Click to claim", "spam"),
+                ("Hello, how are you doing today?", "ham"),
+                ("Meeting at 3pm tomorrow", "ham"),
+                ("Can you send me the report?", "ham"),
+                ("Thanks for your help yesterday", "ham"),
+                ("Looking forward to the weekend", "ham"),
+                ("Congratulations! You've won $10000!", "spam"),
+                ("Call now for free consultation", "spam"),
+                ("Your credit card has been charged", "spam"),
+                ("See you at the conference", "ham"),
+                ("Happy birthday! Hope you have a great day", "ham")
+            ]
+            
+            texts = [item[0] for item in training_data]
+            labels = [item[1] for item in training_data]
+        else:
+            texts = data['text'].tolist()
+            labels = data['label'].tolist()
+        
+        # Preprocess texts
+        processed_texts = [self.preprocess_text(text) for text in texts]
+        
+        # Vectorize the text
+        X = self.vectorizer.fit_transform(processed_texts)
+        
+        # Train the model
+        self.model.fit(X, labels)
+        self.is_trained = True
+    
+    def predict(self, text):
+        """Predict if a text is spam or ham"""
+        if not self.is_trained:
+            self.train()  # Train with default data if not trained
+        
+        processed_text = self.preprocess_text(text)
+        text_vector = self.vectorizer.transform([processed_text])
+        prediction = self.model.predict(text_vector)[0]
+        probability = self.model.predict_proba(text_vector)[0]
+        
+        # Get probability for the predicted class
+        if prediction == 'spam':
+            prob = probability[1] if len(probability) > 1 else probability[0]
+        else:
+            prob = probability[0] if len(probability) > 1 else probability[0]
+        
+        return prediction, prob
+
+# Global spam filter instance
+spam_filter = SpamFilter()
+
+@app.route('/')
+def home():
+    return '''
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Spam Detection with NLP</title>
+        <style>
+            body {
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                min-height: 100vh;
+                color: #333;
+            }
+            .container {
+                background: white;
+                padding: 30px;
+                border-radius: 15px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            }
+            h1 {
+                text-align: center;
+                color: #4a5568;
+                margin-bottom: 30px;
+            }
+            .form-group {
+                margin-bottom: 20px;
+            }
+            label {
+                display: block;
+                margin-bottom: 5px;
+                font-weight: bold;
+                color: #4a5568;
+            }
+            textarea {
+                width: 100%;
+                padding: 15px;
+                border: 2px solid #e2e8f0;
+                border-radius: 8px;
+                font-size: 16px;
+                resize: vertical;
+                min-height: 120px;
+                box-sizing: border-box;
+            }
+            textarea:focus {
+                outline: none;
+                border-color: #667eea;
+                box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            }
+            button {
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 15px 30px;
+                border: none;
+                border-radius: 8px;
+                font-size: 16px;
+                cursor: pointer;
+                width: 100%;
+                transition: transform 0.2s;
+            }
+            button:hover {
+                transform: translateY(-2px);
+            }
+            button:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+                transform: none;
+            }
+            .result {
+                margin-top: 30px;
+                padding: 20px;
+                border-radius: 8px;
+                text-align: center;
+                font-size: 18px;
+                font-weight: bold;
+                display: none;
+            }
+            .spam {
+                background: #fed7d7;
+                color: #c53030;
+                border: 2px solid #feb2b2;
+            }
+            .ham {
+                background: #c6f6d5;
+                color: #22543d;
+                border: 2px solid #9ae6b4;
+            }
+            .loading {
+                display: none;
+                text-align: center;
+                margin-top: 20px;
+            }
+            .spinner {
+                border: 4px solid #f3f3f3;
+                border-top: 4px solid #667eea;
+                border-radius: 50%;
+                width: 30px;
+                height: 30px;
+                animation: spin 1s linear infinite;
+                margin: 0 auto;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🛡️ Spam Detection with NLP</h1>
+            <form id="spamForm">
+                <div class="form-group">
+                    <label for="message">Enter your message to check:</label>
+                    <textarea id="message" name="message" placeholder="Type your message here..." required></textarea>
+                </div>
+                <button type="submit">Check for Spam</button>
+            </form>
+            
+            <div class="loading" id="loading">
+                <div class="spinner"></div>
+                <p>Analyzing message...</p>
+            </div>
+            
+            <div class="result" id="result"></div>
+        </div>
+
+        <script>
+            document.getElementById('spamForm').addEventListener('submit', async function(e) {
+                e.preventDefault();
+                
+                const message = document.getElementById('message').value;
+                const button = document.querySelector('button');
+                const loading = document.getElementById('loading');
+                const result = document.getElementById('result');
+                
+                // Show loading state
+                button.disabled = true;
+                loading.style.display = 'block';
+                result.style.display = 'none';
+                
+                try {
+                    const response = await fetch('/api/check_spam', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ message: message })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        const probability = (data.probability * 100).toFixed(1);
+                        const resultClass = data.is_spam ? 'spam' : 'ham';
+                        const resultText = data.is_spam ? 'SPAM' : 'NOT SPAM';
+                        const emoji = data.is_spam ? '⚠️' : '✅';
+                        
+                        result.className = `result ${resultClass}`;
+                        result.innerHTML = `
+                            ${emoji} <strong>${resultText}</strong><br>
+                            <small>Confidence: ${probability}%</small>
+                        `;
+                        result.style.display = 'block';
+                    } else {
+                        throw new Error(data.error || 'An error occurred');
+                    }
+                } catch (error) {
+                    result.className = 'result spam';
+                    result.innerHTML = `❌ Error: ${error.message}`;
+                    result.style.display = 'block';
+                } finally {
+                    button.disabled = false;
+                    loading.style.display = 'none';
+                }
+            });
+        </script>
+    </body>
+    </html>
+    '''
+
+@app.route('/api/check_spam', methods=['POST'])
+def check_spam():
+    try:
+        data = request.get_json()
+        message = data.get('message', '')
+        
+        if not message:
+            return jsonify({'error': 'No message provided'}), 400
+        
+        # Ensure the model is trained
+        if not spam_filter.is_trained:
+            spam_filter.train()
+        
+        prediction, probability = spam_filter.predict(message)
+        
+        return jsonify({
+            'prediction': prediction,
+            'probability': float(probability),
+            'is_spam': prediction == 'spam'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# This is required for Vercel
+def handler(request):
+    return app(request.environ, lambda *args: None)
+
+# For local development
+if __name__ == '__main__':
+    app.run(debug=True)
